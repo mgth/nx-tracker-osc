@@ -1,0 +1,24 @@
+[package]
+name = "nx-tracker-osc"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Waves Nx Head Tracker (NXIMU010) BLE -> OSC bridge for IEM SceneRotator / Omniphony"
+authors = ["Mathieu GRENET <mathieu@mgth.fr>"]
+rust-version = "1.82"
+
+[[bin]]
+name = "nxosc"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+btleplug = "0.11"
+futures = "0.3"
+rosc = "0.11"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = "1"
