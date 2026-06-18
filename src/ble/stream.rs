@@ -3,7 +3,9 @@
 use std::time::Instant;
 
 use btleplug::api::Peripheral as _;
+use btleplug::platform::Peripheral;
 use futures::{Stream, StreamExt};
+use uuid::Uuid;
 
 use super::device::Tracker;
 use crate::error::NxError;
@@ -16,11 +18,13 @@ pub struct Frame {
     pub bytes: Vec<u8>,
 }
 
-/// Subscribe to the tracker's notifications and yield only `a015` payloads,
-/// timestamped relative to the first frame.
-pub async fn frames(tracker: &Tracker) -> Result<impl Stream<Item = Frame>, NxError> {
-    let notifications = tracker.peripheral.notifications().await?;
-    let notify_uuid = tracker.notify_char.uuid;
+/// Subscribe to `peripheral`'s notifications and yield only payloads on
+/// `notify_uuid`, timestamped relative to the first frame.
+pub async fn frames_on(
+    peripheral: &Peripheral,
+    notify_uuid: Uuid,
+) -> Result<impl Stream<Item = Frame>, NxError> {
+    let notifications = peripheral.notifications().await?;
     let start = Instant::now();
 
     let stream = notifications.filter_map(move |vn| async move {
@@ -34,4 +38,9 @@ pub async fn frames(tracker: &Tracker) -> Result<impl Stream<Item = Frame>, NxEr
         }
     });
     Ok(stream)
+}
+
+/// Yield only `a015` payloads from a started [`Tracker`].
+pub async fn frames(tracker: &Tracker) -> Result<impl Stream<Item = Frame>, NxError> {
+    frames_on(&tracker.peripheral, tracker.notify_char.uuid).await
 }

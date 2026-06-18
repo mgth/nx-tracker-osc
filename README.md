@@ -137,6 +137,25 @@ Extras:
 - `--max-hz <n>`: cap the OSC send rate (default 60).
 - Auto-reconnects when the tracker sleeps/wakes.
 
+### Device exploration (`gatt` / `probe`)
+
+```sh
+# Map the device: connect WITHOUT sending start, print every service +
+# characteristic and read the readable ones (battery, firmware, manufacturer…).
+nxosc gatt
+
+# Experiment on the a011 command characteristic and measure the a015 rate.
+nxosc probe --rate 100      # write [100 u32 LE, 0x01] -> expect ~100 Hz
+nxosc probe --stop          # write [0x32,0,0,0,0x00]  -> expect the stream to stop
+nxosc probe --cmd "32 00 00 00 01"   # write arbitrary bytes to a011
+```
+
+The start command `[0x32, 0x00, 0x00, 0x00, 0x01]` looks like
+**`[rate (u32 LE), enable (u8)]`**: `0x32` = 50, and the stream runs at ~50 Hz.
+`probe --rate` tests that (and `--stop` tests `enable = 0`). Both commands only
+ever *write* to `a011` — no other characteristic is written, so a DFU/firmware
+service (if present) is never touched. `gatt` is fully read-only.
+
 ### Capture protocol for Phase 2
 
 To pin down the layout, capture a few short, labelled runs and send the CSVs:

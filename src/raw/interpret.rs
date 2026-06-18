@@ -52,18 +52,14 @@ impl Layout {
         match self {
             Layout::I16Le => i16::from_le_bytes([bytes[off], bytes[off + 1]]) as f64,
             Layout::I16Be => i16::from_be_bytes([bytes[off], bytes[off + 1]]) as f64,
-            Layout::F32Le => f32::from_le_bytes([
-                bytes[off],
-                bytes[off + 1],
-                bytes[off + 2],
-                bytes[off + 3],
-            ]) as f64,
-            Layout::F32Be => f32::from_be_bytes([
-                bytes[off],
-                bytes[off + 1],
-                bytes[off + 2],
-                bytes[off + 3],
-            ]) as f64,
+            Layout::F32Le => {
+                f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+                    as f64
+            }
+            Layout::F32Be => {
+                f32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+                    as f64
+            }
         }
     }
 }
@@ -182,7 +178,10 @@ impl Analyzer {
         for layout in Layout::ALL {
             let mut cells = String::new();
             for idx in 0..layout.count(frame.bytes.len()) {
-                cells.push_str(&format!("{} ", fmt_value(layout, layout.value(&frame.bytes, idx))));
+                cells.push_str(&format!(
+                    "{} ",
+                    fmt_value(layout, layout.value(&frame.bytes, idx))
+                ));
             }
             out.push_str(&format!("  {:<7}: {}\n", layout.label(), cells.trim_end()));
         }
@@ -202,7 +201,9 @@ impl Analyzer {
         self.frames_at_last_render = self.frame_count;
 
         let mut out = String::from("\x1b[2J\x1b[H");
-        out.push_str("NX raw monitor — move your head on ONE axis at a time; watch the RANGE / bar\n");
+        out.push_str(
+            "NX raw monitor — move your head on ONE axis at a time; watch the RANGE / bar\n",
+        );
         out.push_str(&format!(
             "frames: {}   rate: {:.1} Hz (avg {:.1})   payload: {} bytes\n",
             self.frame_count,

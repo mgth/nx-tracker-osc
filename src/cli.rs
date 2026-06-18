@@ -9,7 +9,11 @@ use crate::ble::ScannedDevice;
 use crate::osc::{Mode, Profile};
 
 #[derive(Parser)]
-#[command(name = "nxosc", version, about = "Waves Nx Head Tracker (BLE) -> OSC bridge")]
+#[command(
+    name = "nxosc",
+    version,
+    about = "Waves Nx Head Tracker (BLE) -> OSC bridge"
+)]
 pub struct Cli {
     /// Increase log verbosity (-v debug, -vv trace). Overridden by RUST_LOG.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -28,6 +32,12 @@ pub enum Command {
     Raw(RawArgs),
     /// Phase 3 (not implemented yet): decode orientation and stream it as OSC.
     Run(RunArgs),
+    /// Connect (without sending start) and print the full GATT table, reading
+    /// every readable characteristic — maps the device (battery, firmware, …).
+    Gatt(GattArgs),
+    /// Write a command to `a011` and measure the resulting `a015` rate.
+    /// Tests the `[rate u32 LE, enable u8]` start-command hypothesis.
+    Probe(ProbeArgs),
 }
 
 #[derive(Args)]
@@ -110,6 +120,52 @@ pub struct RunArgs {
     /// Capture the startup orientation as "forward" immediately.
     #[arg(long)]
     pub recenter_on_start: bool,
+}
+
+#[derive(Args)]
+pub struct GattArgs {
+    /// Force the device by MAC address instead of discovering it by name.
+    #[arg(long)]
+    pub address: Option<String>,
+
+    /// Case-insensitive substring the advertised name must contain.
+    #[arg(long, default_value = "nx tracker")]
+    pub name: String,
+
+    /// How long to look for the device before giving up (seconds).
+    #[arg(long, default_value_t = 10)]
+    pub scan_secs: u64,
+}
+
+#[derive(Args)]
+pub struct ProbeArgs {
+    /// Force the device by MAC address instead of discovering it by name.
+    #[arg(long)]
+    pub address: Option<String>,
+
+    /// Case-insensitive substring the advertised name must contain.
+    #[arg(long, default_value = "nx tracker")]
+    pub name: String,
+
+    /// How long to look for the device before giving up (seconds).
+    #[arg(long, default_value_t = 10)]
+    pub scan_secs: u64,
+
+    /// Request streaming at this rate (Hz): writes `[rate u32 LE, 0x01]` to a011.
+    #[arg(long, conflicts_with_all = ["stop", "cmd"])]
+    pub rate: Option<u32>,
+
+    /// Write `[0x32,0,0,0,0x00]` (enable=0) and check the stream stops.
+    #[arg(long, conflicts_with_all = ["rate", "cmd"])]
+    pub stop: bool,
+
+    /// Write arbitrary bytes to a011, e.g. "32 00 00 00 01" or "3200000001".
+    #[arg(long, conflicts_with_all = ["rate", "stop"])]
+    pub cmd: Option<String>,
+
+    /// Seconds to measure the a015 rate after writing.
+    #[arg(long, default_value_t = 4)]
+    pub secs: u64,
 }
 
 /// Initialise `tracing`. `RUST_LOG` wins if set; otherwise `-v` flags decide.

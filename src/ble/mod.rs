@@ -2,6 +2,7 @@
 //! notification stream. Designed to be reusable as-is from the future `run`
 //! command and from Omniphony.
 
+pub mod gatt;
 pub mod uuids;
 
 mod device;

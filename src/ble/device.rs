@@ -78,8 +78,10 @@ pub async fn scan(duration: Duration) -> Result<Vec<ScannedDevice>, NxError> {
     Ok(out)
 }
 
-/// Locate, connect, subscribe to `a015`, and write the start command to `a011`.
-pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
+/// Locate the tracker and bring up a connection with services discovered,
+/// WITHOUT subscribing or writing any command. Shared by [`connect`], the GATT
+/// dump and the `a011` probe.
+pub async fn connect_raw(opts: &ConnectOptions) -> Result<Peripheral, NxError> {
     let adapter = first_adapter().await?;
     adapter.start_scan(ScanFilter::default()).await?;
 
@@ -111,17 +113,36 @@ pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
         target.connect().await?;
     }
     target.discover_services().await?;
+    Ok(target)
+}
 
-    let chars = target.characteristics();
-    let notify_char = chars
-        .iter()
-        .find(|c| c.uuid == uuids::CHAR_NOTIFY)
-        .cloned()
+/// Write type a characteristic supports (`WithResponse` when it advertises
+/// `WRITE`, else `WithoutResponse`).
+pub(super) fn write_type_for(c: &Characteristic) -> WriteType {
+    if c.properties.contains(CharPropFlags::WRITE) {
+        WriteType::WithResponse
+    } else {
+        WriteType::WithoutResponse
+    }
+}
+
+/// Find a characteristic by UUID on a connected peripheral.
+pub(super) fn find_char(peripheral: &Peripheral, uuid: uuid::Uuid) -> Option<Characteristic> {
+    peripheral
+        .characteristics()
+        .into_iter()
+        .find(|c| c.uuid == uuid)
+}
+
+/// Locate, connect, subscribe to `a015`, and write the start command to `a011`.
+pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
+    let target = connect_raw(opts).await?;
+    let name = target.properties().await?.and_then(|p| p.local_name);
+    let address = target.address().to_string();
+
+    let notify_char = find_char(&target, uuids::CHAR_NOTIFY)
         .ok_or(NxError::MissingCharacteristic("a015 (notify)"))?;
-    let write_char = chars
-        .iter()
-        .find(|c| c.uuid == uuids::CHAR_WRITE)
-        .cloned()
+    let write_char = find_char(&target, uuids::CHAR_WRITE)
         .ok_or(NxError::MissingCharacteristic("a011 (write/start)"))?;
 
     if notify_char.service_uuid != uuids::SERVICE {
@@ -134,15 +155,9 @@ pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
 
     // Subscribe before issuing start so the first packets are not missed.
     target.subscribe(&notify_char).await?;
-
-    let write_type = if write_char.properties.contains(CharPropFlags::WRITE) {
-        WriteType::WithResponse
-    } else {
-        WriteType::WithoutResponse
-    };
-    debug!(?write_type, "writing start command to a011");
+    debug!("writing start command to a011");
     target
-        .write(&write_char, uuids::START_CMD, write_type)
+        .write(&write_char, uuids::START_CMD, write_type_for(&write_char))
         .await?;
 
     Ok(Tracker {
