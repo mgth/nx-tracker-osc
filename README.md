@@ -148,12 +148,23 @@ nxosc gatt
 nxosc probe --rate 100      # write [100 u32 LE, 0x01] -> expect ~100 Hz
 nxosc probe --stop          # write [0x32,0,0,0,0x00]  -> expect the stream to stop
 nxosc probe --cmd "32 00 00 00 01"   # write arbitrary bytes to a011
-nxosc probe --sweep 50:100:5         # one connection; find where the rate "steps up"
+nxosc probe --sweep 50:100:5         # one connection; sweep rates on one link
+
+# Try to recover a stalled/degraded stream over GATT (re-arm notifications).
+nxosc kick
 ```
 
 `probe --sweep` takes a comma list ("50,60,70") or a range ("lo:hi:step") and
 writes each rate then measures on the **same** connection — avoiding the
 reconnect churn that can wedge the BLE link / send the tracker to sleep.
+
+`nxosc kick` measures the rate, then re-arms notifications (CCCD
+unsubscribe→subscribe) and re-sends start. A **degraded** stream (e.g. a
+half-rate ~25 Hz drop) climbs back to ~50 Hz after the re-arm — recovered with
+no button press. A **full stall** (0 Hz) is firmware-internal: neither the
+re-arm, a plain reconnect, nor the vendor characteristics revive it (all
+tested) — only a **short press of the device button** does (a long press
+resets the tracker, with a red flash).
 
 The start command is **`[rate (u32 LE), enable (u8)]`** (`0x32` = 50 = the
 default 50 Hz). On a **fresh connection** the byte maps essentially **1:1 to the

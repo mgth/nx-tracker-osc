@@ -13,6 +13,7 @@
 use std::time::{Duration, Instant};
 
 use btleplug::api::{CharPropFlags, Characteristic, Peripheral as _};
+use btleplug::platform::Peripheral;
 use futures::StreamExt;
 use uuid::Uuid;
 
@@ -139,6 +140,75 @@ pub async fn probe(opts: &ConnectOptions, action: ProbeAction, secs: u64) -> Res
         } else {
             println!("{label:>12} -> {hz:>6.1} Hz  ({count} frames, {last_len} B)");
         }
+    }
+    Ok(())
+}
+
+/// Count `a015` frames over `secs` on an already-subscribed connection.
+async fn count_frames(p: &Peripheral, notify_uuid: Uuid, secs: u64) -> Result<u64, NxError> {
+    let s = stream::frames_on(p, notify_uuid).await?;
+    futures::pin_mut!(s);
+    let sleep = tokio::time::sleep(Duration::from_secs(secs.max(1)));
+    tokio::pin!(sleep);
+    let mut n: u64 = 0;
+    loop {
+        tokio::select! {
+            _ = &mut sleep => break,
+            f = s.next() => match f { Some(_) => n += 1, None => break },
+        }
+    }
+    Ok(n)
+}
+
+/// Experimental: try to revive a stalled stream purely over GATT (no button).
+/// Measures the baseline rate, then re-arms notifications (CCCD toggle:
+/// unsubscribe -> subscribe) and re-sends start, and measures again — to see
+/// whether a GATT re-subscribe substitutes for the device's short-press resume.
+pub async fn kick(opts: &ConnectOptions, secs: u64) -> Result<(), NxError> {
+    let p = connect_raw(opts).await?;
+    let write_char = find_char(&p, uuids::CHAR_WRITE)
+        .ok_or(NxError::MissingCharacteristic("a011 (write/start)"))?;
+    let notify_char =
+        find_char(&p, uuids::CHAR_NOTIFY).ok_or(NxError::MissingCharacteristic("a015 (notify)"))?;
+    let secs = secs.max(1);
+
+    p.subscribe(&notify_char).await?;
+    let before = count_frames(&p, notify_char.uuid, secs).await?;
+    println!(
+        "baseline:      {before:>4} frames / {secs}s  ({:.1} Hz)",
+        before as f64 / secs as f64
+    );
+
+    println!("re-arming: unsubscribe -> subscribe (CCCD 1->0->1) + start…");
+    p.unsubscribe(&notify_char).await?;
+    p.subscribe(&notify_char).await?;
+    p.write(
+        &write_char,
+        &uuids::start_cmd(50),
+        write_type_for(&write_char),
+    )
+    .await?;
+    let after = count_frames(&p, notify_char.uuid, secs).await?;
+    println!(
+        "after re-arm:  {after:>4} frames / {secs}s  ({:.1} Hz)",
+        after as f64 / secs as f64
+    );
+
+    // A CCCD re-arm recovers a *degraded* (e.g. half-rate ~25 Hz) stream — that
+    // climbs back to ~50 Hz here. A *full* stall (0 Hz) is firmware-internal and
+    // only the device's short button-press clears it (re-arm doesn't help).
+    let r_before = before as f64 / secs as f64;
+    let r_after = after as f64 / secs as f64;
+    if after >= before + before / 3 + 5 {
+        println!(
+            "=> re-arm RECOVERED the rate: {r_before:.1} -> {r_after:.1} Hz (no button needed)"
+        );
+    } else if after == 0 {
+        println!(
+            "=> full stall (0 Hz): a GATT re-arm can't fix it — short-press the device button."
+        );
+    } else {
+        println!("=> no improvement ({r_after:.1} Hz); the stream was already healthy.");
     }
     Ok(())
 }

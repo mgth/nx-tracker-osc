@@ -38,6 +38,9 @@ pub enum Command {
     /// Write a command to `a011` and measure the resulting `a015` rate.
     /// Tests the `[rate u32 LE, enable u8]` start-command hypothesis.
     Probe(ProbeArgs),
+    /// Experimental: try to revive a stalled stream over GATT (CCCD re-subscribe)
+    /// instead of a short button press.
+    Kick(KickArgs),
 }
 
 #[derive(Args)]
@@ -181,6 +184,25 @@ pub struct ProbeArgs {
 
     /// Seconds to measure the a015 rate after each write.
     #[arg(long, default_value_t = 4)]
+    pub secs: u64,
+}
+
+#[derive(Args)]
+pub struct KickArgs {
+    /// Force the device by MAC address instead of discovering it by name.
+    #[arg(long)]
+    pub address: Option<String>,
+
+    /// Case-insensitive substring the advertised name must contain.
+    #[arg(long, default_value = "nx tracker")]
+    pub name: String,
+
+    /// How long to look for the device before giving up (seconds).
+    #[arg(long, default_value_t = 10)]
+    pub scan_secs: u64,
+
+    /// Seconds to measure before and after the re-arm.
+    #[arg(long, default_value_t = 3)]
     pub secs: u64,
 }
 

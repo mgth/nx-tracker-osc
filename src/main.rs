@@ -61,6 +61,16 @@ async fn main() -> Result<()> {
             ble::gatt::probe(&opts, action, args.secs).await?;
             Ok(())
         }
+        cli::Command::Kick(args) => {
+            let opts = ble::ConnectOptions {
+                address: args.address,
+                name_contains: args.name,
+                scan_secs: args.scan_secs,
+                rate_hz: 50,
+            };
+            ble::gatt::kick(&opts, args.secs).await?;
+            Ok(())
+        }
     }
 }
 
