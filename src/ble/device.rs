@@ -33,6 +33,9 @@ pub struct ConnectOptions {
     pub name_contains: String,
     /// How long to look for the device before failing.
     pub scan_secs: u64,
+    /// Notification rate (Hz) requested in the start command. Ignored by
+    /// [`connect_raw`] (which sends no command). 50 default; ~100 max.
+    pub rate_hz: u32,
 }
 
 /// A connected, started tracker ready to stream notifications.
@@ -155,9 +158,13 @@ pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
 
     // Subscribe before issuing start so the first packets are not missed.
     target.subscribe(&notify_char).await?;
-    debug!("writing start command to a011");
+    debug!(rate_hz = opts.rate_hz, "writing start command to a011");
     target
-        .write(&write_char, uuids::START_CMD, write_type_for(&write_char))
+        .write(
+            &write_char,
+            &uuids::start_cmd(opts.rate_hz),
+            write_type_for(&write_char),
+        )
         .await?;
 
     Ok(Tracker {

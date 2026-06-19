@@ -21,6 +21,7 @@ pub async fn run(args: RawArgs) -> Result<()> {
         address: args.address.clone(),
         name_contains: args.name.clone(),
         scan_secs: args.scan_secs,
+        rate_hz: args.rate,
     };
 
     let mut csv = match &args.csv {

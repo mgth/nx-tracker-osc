@@ -150,11 +150,28 @@ nxosc probe --stop          # write [0x32,0,0,0,0x00]  -> expect the stream to s
 nxosc probe --cmd "32 00 00 00 01"   # write arbitrary bytes to a011
 ```
 
-The start command `[0x32, 0x00, 0x00, 0x00, 0x01]` looks like
-**`[rate (u32 LE), enable (u8)]`**: `0x32` = 50, and the stream runs at ~50 Hz.
-`probe --rate` tests that (and `--stop` tests `enable = 0`). Both commands only
-ever *write* to `a011` — no other characteristic is written, so a DFU/firmware
-service (if present) is never touched. `gatt` is fully read-only.
+The start command is **`[rate (u32 LE), enable (u8)]`** — `0x32` = 50, and the
+stream runs at ~50 Hz. Measured behaviour (`probe`):
+
+| requested | measured | |
+|-----------|----------|--|
+| 50 | ~50 Hz | default, honored |
+| 75 / 100 / 200 / 400 | ~98–100 Hz | saturates at the BLE link ceiling (~100 Hz) |
+| 30 / 10 | erratic (49 / 3.7 Hz) | values below 50 are unreliable |
+
+So the useful range is **50–100 Hz**; ~100 Hz halves the head-tracking sampling
+latency. The 5th byte is **not** a clean enable (writing `0` did not stop the
+stream). `gatt` is read-only; `probe` only ever *writes* to `a011` — no other
+characteristic is touched, so a DFU/firmware service (if present) is safe.
+
+Both `raw` and `run` accept **`--rate <hz>`** (default 50) to request a faster
+stream, e.g. `nxosc run --rate 100 …` for lower-latency head tracking.
+
+GATT map (from `nxosc gatt`): Device Information reports firmware `v100`,
+hardware `v4.4`, software `A v1.30 B v1.13`, "Waves Audio"; a Battery service;
+and vendor characteristics including `a018` (the writable device name) and two
+further vendor services (`a030`, `a050`) of unknown purpose — `a030` looks like
+a DFU control point, so it is left untouched.
 
 ### Capture protocol for Phase 2
 

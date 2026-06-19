@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
                 address: args.address,
                 name_contains: args.name,
                 scan_secs: args.scan_secs,
+                rate_hz: 50, // unused: gatt/probe connect without sending start
             };
             ble::gatt::dump(&opts).await?;
             Ok(())
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
                 address: args.address,
                 name_contains: args.name,
                 scan_secs: args.scan_secs,
+                rate_hz: 50, // unused: gatt/probe connect without sending start
             };
             ble::gatt::probe(&opts, action, args.secs).await?;
             Ok(())

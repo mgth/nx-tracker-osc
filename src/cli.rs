@@ -76,6 +76,11 @@ pub struct RawArgs {
     /// Also show the decoded quaternion + yaw/pitch/roll (Phase 2 decoder).
     #[arg(long)]
     pub decode: bool,
+
+    /// Notification rate to request from the tracker (Hz). 50 default; ~100 max
+    /// (BLE-limited); values below 50 are unreliable.
+    #[arg(long, default_value_t = 50)]
+    pub rate: u32,
 }
 
 #[derive(Args)]
@@ -120,6 +125,12 @@ pub struct RunArgs {
     /// Capture the startup orientation as "forward" immediately.
     #[arg(long)]
     pub recenter_on_start: bool,
+
+    /// Notification rate to request from the tracker (Hz); distinct from
+    /// --max-hz (the OSC send cap). 50 default; ~100 max; ~100 halves the
+    /// head-tracking sampling latency.
+    #[arg(long, default_value_t = 50)]
+    pub rate: u32,
 }
 
 #[derive(Args)]
