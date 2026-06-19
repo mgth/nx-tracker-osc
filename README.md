@@ -155,22 +155,31 @@ nxosc probe --sweep 50:100:5         # one connection; find where the rate "step
 writes each rate then measures on the **same** connection — avoiding the
 reconnect churn that can wedge the BLE link / send the tracker to sleep.
 
-The start command is **`[rate (u32 LE), enable (u8)]`** — `0x32` = 50, and the
-stream runs at ~50 Hz. Measured behaviour (`probe`):
+The start command is **`[rate (u32 LE), enable (u8)]`** (`0x32` = 50 = the
+default ~50 Hz). The byte **does set the device output rate** — confirmed live
+on a single connection with `--sweep "100,50,100,50"`: 100 → ~98 Hz, 50 → ~50
+Hz, tracking each write.
 
-| requested | measured | |
-|-----------|----------|--|
-| 50 | ~50 Hz | default, honored |
-| 75 / 100 / 200 / 400 | ~98–100 Hz | saturates at the BLE link ceiling (~100 Hz) |
-| 30 / 10 | erratic (49 / 3.7 Hz) | values below 50 are unreliable |
+But the achievable rate is **capped by the BLE connection interval**, which is
+negotiated per connection and varies on this host (~50 Hz or ~100 Hz):
+
+- On a **fast-interval** connection, `--rate 100` reaches ~98 Hz and `--rate 50`
+  throttles to ~50 Hz.
+- On a **slow-interval** connection the stream stays near ~50 Hz no matter what
+  you request (a `--sweep 50:100:5` there reads a flat ~50).
 
 So the useful range is **50–100 Hz**; ~100 Hz halves the head-tracking sampling
-latency. The 5th byte is **not** a clean enable (writing `0` did not stop the
-stream). `gatt` is read-only; `probe` only ever *writes* to `a011` — no other
-characteristic is touched, so a DFU/firmware service (if present) is safe.
+latency *when the link negotiates a fast interval* (not guaranteed). The 5th
+byte is **not** a clean enable (writing `0` did not stop the stream). `gatt` is
+read-only; `probe` only ever *writes* to `a011` — no other characteristic is
+touched, so a DFU/firmware service (if present) is safe.
 
-Both `raw` and `run` accept **`--rate <hz>`** (default 50) to request a faster
-stream, e.g. `nxosc run --rate 100 …` for lower-latency head tracking.
+> Note: a `--sweep` measures *changes on one connection*; to compare the
+> achievable ceiling across connections you must reconnect — but this tracker
+> tends to stop streaming after a few rapid reconnects (power-cycle to recover).
+
+Both `raw` and `run` accept **`--rate <hz>`** (default 50), e.g.
+`nxosc run --rate 100 …` for lower-latency head tracking when the link allows.
 
 GATT map (from `nxosc gatt`): Device Information reports firmware `v100`,
 hardware `v4.4`, software `A v1.30 B v1.13`, "Waves Audio"; a Battery service;
