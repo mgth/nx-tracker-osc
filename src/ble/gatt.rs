@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use btleplug::api::{CharPropFlags, Characteristic, Peripheral as _};
 use futures::StreamExt;
-use tracing::info;
 use uuid::Uuid;
 
 use super::device::{connect_raw, find_char, write_type_for, ConnectOptions};
@@ -73,67 +72,73 @@ pub enum ProbeAction {
     Stop,
     /// Arbitrary raw bytes.
     Raw(Vec<u8>),
+    /// Several rates in order on ONE connection (no reconnect between them).
+    Sweep(Vec<u32>),
 }
 
-/// Write a command to `a011`, then measure the resulting `a015` rate for `secs`.
+/// Write command(s) to `a011`, measuring the resulting `a015` rate after each
+/// for `secs`. A [`ProbeAction::Sweep`] reuses a single connection + stream so
+/// it does not reconnect between rates (reconnect churn wedges the BLE link).
 pub async fn probe(opts: &ConnectOptions, action: ProbeAction, secs: u64) -> Result<(), NxError> {
     let p = connect_raw(opts).await?;
     let write_char = find_char(&p, uuids::CHAR_WRITE)
         .ok_or(NxError::MissingCharacteristic("a011 (write/start)"))?;
     let notify_char =
         find_char(&p, uuids::CHAR_NOTIFY).ok_or(NxError::MissingCharacteristic("a015 (notify)"))?;
-
-    let cmd: Vec<u8> = match &action {
-        ProbeAction::Rate(hz) => {
-            let mut c = hz.to_le_bytes().to_vec();
-            c.push(0x01);
-            c
-        }
-        ProbeAction::Stop => vec![0x32, 0x00, 0x00, 0x00, 0x00],
-        ProbeAction::Raw(bytes) => bytes.clone(),
-    };
-
-    // Subscribe before writing so we catch the immediate response.
-    p.subscribe(&notify_char).await?;
-    let hex: String = cmd.iter().map(|b| format!("{b:02x} ")).collect();
-    info!("writing to a011: {}", hex.trim_end());
-    p.write(&write_char, &cmd, write_type_for(&write_char))
-        .await?;
-
+    let write_type = write_type_for(&write_char);
     let secs = secs.max(1);
+
+    // Subscribe once and reuse one notification stream across every step.
+    p.subscribe(&notify_char).await?;
     let s = stream::frames_on(&p, notify_char.uuid).await?;
     futures::pin_mut!(s);
-    let sleep = tokio::time::sleep(Duration::from_secs(secs));
-    tokio::pin!(sleep);
-    let start = Instant::now();
-    let mut count: u64 = 0;
-    let mut last_len = 0usize;
-    loop {
-        tokio::select! {
-            _ = &mut sleep => break,
-            frame = s.next() => match frame {
-                Some(f) => {
-                    count += 1;
-                    last_len = f.bytes.len();
-                }
-                None => break,
-            },
-        }
-    }
-    let hz = count as f64 / start.elapsed().as_secs_f64().max(1e-9);
 
-    if matches!(action, ProbeAction::Stop) {
-        if count == 0 {
-            println!("STOP: no notifications in {secs}s — stream stopped");
-        } else {
-            println!(
-                "STOP: still {count} notifications ({hz:.1} Hz) in {secs}s — enable=0 not honoured"
-            );
+    // (label, command bytes) to run in order.
+    let steps: Vec<(String, Vec<u8>)> = match &action {
+        ProbeAction::Rate(hz) => vec![(format!("rate {hz}"), uuids::start_cmd(*hz).to_vec())],
+        ProbeAction::Stop => vec![("stop (enable=0)".to_string(), vec![0x32, 0, 0, 0, 0x00])],
+        ProbeAction::Raw(bytes) => {
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            vec![(format!("cmd {hex}"), bytes.clone())]
         }
-    } else {
-        println!(
-            "received {count} notifications in {secs}s -> {hz:.1} Hz, payload {last_len} bytes"
-        );
+        ProbeAction::Sweep(rates) => rates
+            .iter()
+            .map(|r| (format!("rate {r:>4}"), uuids::start_cmd(*r).to_vec()))
+            .collect(),
+    };
+    let is_stop = matches!(action, ProbeAction::Stop);
+
+    for (label, cmd) in &steps {
+        p.write(&write_char, cmd, write_type).await?;
+        let sleep = tokio::time::sleep(Duration::from_secs(secs));
+        tokio::pin!(sleep);
+        let start = Instant::now();
+        let mut count: u64 = 0;
+        let mut last_len = 0usize;
+        loop {
+            tokio::select! {
+                _ = &mut sleep => break,
+                frame = s.next() => match frame {
+                    Some(f) => {
+                        count += 1;
+                        last_len = f.bytes.len();
+                    }
+                    None => break,
+                },
+            }
+        }
+        let hz = count as f64 / start.elapsed().as_secs_f64().max(1e-9);
+        if is_stop {
+            if count == 0 {
+                println!("{label}: no notifications in {secs}s — stream stopped");
+            } else {
+                println!(
+                    "{label}: still {count} notifications ({hz:.1} Hz) — enable=0 not honoured"
+                );
+            }
+        } else {
+            println!("{label:>12} -> {hz:>6.1} Hz  ({count} frames, {last_len} B)");
+        }
     }
     Ok(())
 }

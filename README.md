@@ -148,7 +148,12 @@ nxosc gatt
 nxosc probe --rate 100      # write [100 u32 LE, 0x01] -> expect ~100 Hz
 nxosc probe --stop          # write [0x32,0,0,0,0x00]  -> expect the stream to stop
 nxosc probe --cmd "32 00 00 00 01"   # write arbitrary bytes to a011
+nxosc probe --sweep 50:100:5         # one connection; find where the rate "steps up"
 ```
+
+`probe --sweep` takes a comma list ("50,60,70") or a range ("lo:hi:step") and
+writes each rate then measures on the **same** connection — avoiding the
+reconnect churn that can wedge the BLE link / send the tracker to sleep.
 
 The start command is **`[rate (u32 LE), enable (u8)]`** — `0x32` = 50, and the
 stream runs at ~50 Hz. Measured behaviour (`probe`):

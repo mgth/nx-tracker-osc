@@ -174,7 +174,12 @@ pub struct ProbeArgs {
     #[arg(long, conflicts_with_all = ["rate", "stop"])]
     pub cmd: Option<String>,
 
-    /// Seconds to measure the a015 rate after writing.
+    /// Sweep several rates on ONE connection: a comma list "50,60,70" or a
+    /// range "lo:hi:step" e.g. "50:100:5". Avoids reconnect churn.
+    #[arg(long, conflicts_with_all = ["rate", "stop", "cmd"])]
+    pub sweep: Option<String>,
+
+    /// Seconds to measure the a015 rate after each write.
     #[arg(long, default_value_t = 4)]
     pub secs: u64,
 }
