@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
                 scan_secs: args.scan_secs,
                 rate_hz: 50,
             };
-            ble::gatt::kick(&opts, args.secs).await?;
+            ble::gatt::kick(&opts, args.secs, !args.no_rearm).await?;
             Ok(())
         }
     }

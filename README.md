@@ -159,12 +159,17 @@ writes each rate then measures on the **same** connection — avoiding the
 reconnect churn that can wedge the BLE link / send the tracker to sleep.
 
 `nxosc kick` measures the rate, then re-arms notifications (CCCD
-unsubscribe→subscribe) and re-sends start. A **degraded** stream (e.g. a
-half-rate ~25 Hz drop) climbs back to ~50 Hz after the re-arm — recovered with
-no button press. A **full stall** (0 Hz) is firmware-internal: neither the
-re-arm, a plain reconnect, nor the vendor characteristics revive it (all
-tested) — only a **short press of the device button** does (a long press
-resets the tracker, with a red flash).
+unsubscribe→subscribe) and re-sends start, and measures again. A **full stall**
+(0 Hz) is firmware-internal: neither the re-arm, a plain reconnect, nor the
+vendor characteristics revive it (all tested) — only a **short press of the
+device button** does (a long press resets the tracker, with a red flash).
+
+A **degraded** stream (e.g. a half-rate ~25 Hz drop) was once seen to climb
+back to ~50 Hz across a re-arm, but that is a **single observation and not
+validated** — the stream may simply recover on its own. Use `kick --no-rearm`
+on a degraded stream as a control: if the rate rises in the second window
+*without* any re-arm, the recovery is spontaneous and the re-arm is not the
+cause.
 
 The start command is **`[rate (u32 LE), enable (u8)]`** (`0x32` = 50 = the
 default 50 Hz). On a **fresh connection** the byte maps essentially **1:1 to the

@@ -204,6 +204,12 @@ pub struct KickArgs {
     /// Seconds to measure before and after the re-arm.
     #[arg(long, default_value_t = 3)]
     pub secs: u64,
+
+    /// Control mode: skip the re-arm and just measure a second window, to check
+    /// whether a degraded stream recovers on its own (so a self-recovery is not
+    /// mistaken for the re-arm working).
+    #[arg(long)]
+    pub no_rearm: bool,
 }
 
 /// Initialise `tracing`. `RUST_LOG` wins if set; otherwise `-v` flags decide.

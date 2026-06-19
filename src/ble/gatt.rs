@@ -160,11 +160,12 @@ async fn count_frames(p: &Peripheral, notify_uuid: Uuid, secs: u64) -> Result<u6
     Ok(n)
 }
 
-/// Experimental: try to revive a stalled stream purely over GATT (no button).
-/// Measures the baseline rate, then re-arms notifications (CCCD toggle:
-/// unsubscribe -> subscribe) and re-sends start, and measures again — to see
-/// whether a GATT re-subscribe substitutes for the device's short-press resume.
-pub async fn kick(opts: &ConnectOptions, secs: u64) -> Result<(), NxError> {
+/// Experimental: measure the `a015` rate, optionally re-arm notifications (CCCD
+/// unsubscribe -> subscribe + re-start), then measure again. With `rearm =
+/// false` it is a **control**: a second window with no intervention, to check
+/// whether a degraded stream recovers on its own — so a spontaneous recovery is
+/// not mistaken for the re-arm working (N=1 + post-hoc = Skinner's pigeon).
+pub async fn kick(opts: &ConnectOptions, secs: u64, rearm: bool) -> Result<(), NxError> {
     let p = connect_raw(opts).await?;
     let write_char = find_char(&p, uuids::CHAR_WRITE)
         .ok_or(NxError::MissingCharacteristic("a011 (write/start)"))?;
@@ -179,36 +180,46 @@ pub async fn kick(opts: &ConnectOptions, secs: u64) -> Result<(), NxError> {
         before as f64 / secs as f64
     );
 
-    println!("re-arming: unsubscribe -> subscribe (CCCD 1->0->1) + start…");
-    p.unsubscribe(&notify_char).await?;
-    p.subscribe(&notify_char).await?;
-    p.write(
-        &write_char,
-        &uuids::start_cmd(50),
-        write_type_for(&write_char),
-    )
-    .await?;
+    if rearm {
+        println!("re-arming: unsubscribe -> subscribe (CCCD 1->0->1) + start…");
+        p.unsubscribe(&notify_char).await?;
+        p.subscribe(&notify_char).await?;
+        p.write(
+            &write_char,
+            &uuids::start_cmd(50),
+            write_type_for(&write_char),
+        )
+        .await?;
+    } else {
+        println!("control: NO re-arm — measuring a second window to test self-recovery…");
+    }
     let after = count_frames(&p, notify_char.uuid, secs).await?;
     println!(
-        "after re-arm:  {after:>4} frames / {secs}s  ({:.1} Hz)",
+        "after:         {after:>4} frames / {secs}s  ({:.1} Hz)",
         after as f64 / secs as f64
     );
 
-    // A CCCD re-arm recovers a *degraded* (e.g. half-rate ~25 Hz) stream — that
-    // climbs back to ~50 Hz here. A *full* stall (0 Hz) is firmware-internal and
-    // only the device's short button-press clears it (re-arm doesn't help).
+    // A rise in the second window only implicates the re-arm if it does NOT
+    // happen in the `--no-rearm` control. A full stall (0 Hz) appears firmware-
+    // internal — only the device's short button-press has been seen to clear it.
     let r_before = before as f64 / secs as f64;
     let r_after = after as f64 / secs as f64;
-    if after >= before + before / 3 + 5 {
+    let rose = after >= before + before / 3 + 5;
+    if rose && rearm {
         println!(
-            "=> re-arm RECOVERED the rate: {r_before:.1} -> {r_after:.1} Hz (no button needed)"
+            "=> rate rose after re-arm: {r_before:.1} -> {r_after:.1} Hz — but N=1: run \
+             `kick --no-rearm` on a degraded stream to rule out spontaneous self-recovery \
+             before crediting the re-arm."
+        );
+    } else if rose {
+        println!(
+            "=> control: rate rose to {r_after:.1} Hz WITHOUT any re-arm — self-recovery; \
+             the re-arm is not what fixes it."
         );
     } else if after == 0 {
-        println!(
-            "=> full stall (0 Hz): a GATT re-arm can't fix it — short-press the device button."
-        );
+        println!("=> full stall (0 Hz) — no GATT path revived it; short-press the device button.");
     } else {
-        println!("=> no improvement ({r_after:.1} Hz); the stream was already healthy.");
+        println!("=> no change ({r_after:.1} Hz).");
     }
     Ok(())
 }
