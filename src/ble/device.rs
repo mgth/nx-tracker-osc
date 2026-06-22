@@ -46,7 +46,13 @@ pub struct Tracker {
     pub address: String,
 }
 
-async fn first_adapter() -> Result<Adapter, NxError> {
+/// Open the BlueZ session and return its first adapter.
+///
+/// Each call creates a fresh `Manager` (a new D-Bus connection); callers that
+/// reconnect in a loop MUST create one adapter up front and reuse it via the
+/// `*_on` variants, otherwise a socket leaks per attempt until the process hits
+/// `EMFILE` ("Too many open files") and can no longer open any BLE socket.
+pub async fn first_adapter() -> Result<Adapter, NxError> {
     let manager = Manager::new().await?;
     let adapters = manager.adapters().await?;
     adapters.into_iter().next().ok_or(NxError::NoAdapter)
@@ -82,28 +88,22 @@ pub async fn scan(duration: Duration) -> Result<Vec<ScannedDevice>, NxError> {
 }
 
 /// Locate the tracker and bring up a connection with services discovered,
-/// WITHOUT subscribing or writing any command. Shared by [`connect`], the GATT
-/// dump and the `a011` probe.
+/// WITHOUT subscribing or writing any command. Creates a one-shot adapter; loops
+/// should use [`connect_raw_on`] with a shared adapter to avoid leaking sockets.
 pub async fn connect_raw(opts: &ConnectOptions) -> Result<Peripheral, NxError> {
     let adapter = first_adapter().await?;
-    adapter.start_scan(ScanFilter::default()).await?;
+    connect_raw_on(&adapter, opts).await
+}
 
-    let deadline = Instant::now() + Duration::from_secs(opts.scan_secs.max(1));
-    let target = loop {
-        if let Some(p) = find_match(&adapter, opts).await? {
-            break p;
-        }
-        if Instant::now() >= deadline {
-            let _ = adapter.stop_scan().await;
-            return Err(match &opts.address {
-                Some(a) => NxError::NotFoundAddress(a.clone()),
-                None => NxError::NotFound(opts.name_contains.clone()),
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    };
-    let _ = adapter.stop_scan().await;
-
+/// As [`connect_raw`], but reusing a caller-owned [`Adapter`] so a reconnect
+/// loop opens exactly one D-Bus session for its whole lifetime. Single-shot:
+/// one `connect()` attempt (loops that wait for a sleeping tracker should use
+/// [`connect_waiting_on`]).
+pub async fn connect_raw_on(
+    adapter: &Adapter,
+    opts: &ConnectOptions,
+) -> Result<Peripheral, NxError> {
+    let target = scan_for_match(adapter, opts).await?;
     let name = target.properties().await?.and_then(|p| p.local_name);
     let address = target.address().to_string();
     // The device may already be connected (e.g. a previous run that was killed
@@ -116,6 +116,28 @@ pub async fn connect_raw(opts: &ConnectOptions) -> Result<Peripheral, NxError> {
         target.connect().await?;
     }
     target.discover_services().await?;
+    Ok(target)
+}
+
+/// Scan until the tracker matching `opts` is seen (or the scan window elapses),
+/// then stop scanning and return its handle (NOT connected).
+async fn scan_for_match(adapter: &Adapter, opts: &ConnectOptions) -> Result<Peripheral, NxError> {
+    adapter.start_scan(ScanFilter::default()).await?;
+    let deadline = Instant::now() + Duration::from_secs(opts.scan_secs.max(1));
+    let target = loop {
+        if let Some(p) = find_match(adapter, opts).await? {
+            break p;
+        }
+        if Instant::now() >= deadline {
+            let _ = adapter.stop_scan().await;
+            return Err(match &opts.address {
+                Some(a) => NxError::NotFoundAddress(a.clone()),
+                None => NxError::NotFound(opts.name_contains.clone()),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    let _ = adapter.stop_scan().await;
     Ok(target)
 }
 
@@ -137,11 +159,29 @@ pub(super) fn find_char(peripheral: &Peripheral, uuid: uuid::Uuid) -> Option<Cha
         .find(|c| c.uuid == uuid)
 }
 
-/// Locate, connect, subscribe to `a015`, and write the start command to `a011`.
-pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
-    let target = connect_raw(opts).await?;
+/// Locate the tracker, bring up the link (waiting for it to wake if it is
+/// asleep), subscribe to `a015`, and write the start command to `a011`. Reuses
+/// a caller-owned [`Adapter`] (one D-Bus session for the whole reconnect loop;
+/// avoids the socket leak that ends in `EMFILE`).
+///
+/// Tolerant of a sleeping tracker: see [`wait_for_connection`] — it issues
+/// `connect()` once and then waits, so a reconnect loop never spams BlueZ with
+/// repeated Connect calls (`In Progress` / `Timeout waiting for reply`).
+pub async fn connect_waiting_on(
+    adapter: &Adapter,
+    opts: &ConnectOptions,
+) -> Result<Tracker, NxError> {
+    let target = scan_for_match(adapter, opts).await?;
     let name = target.properties().await?.and_then(|p| p.local_name);
     let address = target.address().to_string();
+
+    if target.is_connected().await.unwrap_or(false) {
+        info!(?name, %address, "tracker already connected — reusing link");
+    } else {
+        info!(?name, %address, "connecting to tracker (will wait if it is asleep)");
+        wait_for_connection(&target).await?;
+    }
+    target.discover_services().await?;
 
     let notify_char = find_char(&target, uuids::CHAR_NOTIFY)
         .ok_or(NxError::MissingCharacteristic("a015 (notify)"))?;
@@ -173,6 +213,62 @@ pub async fn connect(opts: &ConnectOptions) -> Result<Tracker, NxError> {
         name,
         address,
     })
+}
+
+/// Bring up the link to a possibly-asleep tracker without spamming BlueZ.
+///
+/// BlueZ keeps a *pending* connection to a known device and completes it the
+/// moment the device re-advertises (i.e. when the user short-presses its
+/// button). So we issue `connect()` once and then **wait, polling
+/// `is_connected`** — re-issuing Connect each retry only returns `In Progress`
+/// while one is pending (and the call that does wait returns `Timeout waiting
+/// for reply` after BlueZ's D-Bus timeout); both are pure log noise. The first
+/// connect also covers the normal fast path. We re-arm occasionally in case
+/// BlueZ drops the pending connection, and remind the user periodically.
+async fn wait_for_connection(target: &Peripheral) -> Result<(), NxError> {
+    const POLL: Duration = Duration::from_secs(2);
+    const REARM_EVERY: Duration = Duration::from_secs(60);
+    const HINT_EVERY: Duration = Duration::from_secs(120);
+
+    if let Err(e) = target.connect().await {
+        debug!(%e, "connect pending — waiting for the tracker to wake");
+    }
+    let mut last_rearm = Instant::now();
+    let mut last_hint = Instant::now();
+    loop {
+        if target.is_connected().await.unwrap_or(false) {
+            return Ok(());
+        }
+        tokio::time::sleep(POLL).await;
+        let now = Instant::now();
+        if now.duration_since(last_rearm) >= REARM_EVERY {
+            // Re-arm in case the pending connect was dropped; "In Progress" (one
+            // is still pending) is expected and harmless here.
+            if let Err(e) = target.connect().await {
+                debug!(%e, "re-arm connect");
+            }
+            last_rearm = Instant::now();
+        }
+        if now.duration_since(last_hint) >= HINT_EVERY {
+            info!(address = %target.address(), "waiting for the tracker — short-press its button to wake it");
+            last_hint = now;
+        }
+    }
+}
+
+/// Drop the BLE link so the next [`connect`] starts from a clean state. Used
+/// after the notification stream genuinely ends so a stale link is released
+/// before reconnecting.
+pub async fn disconnect(tracker: &Tracker) -> Result<(), NxError> {
+    tracker.peripheral.disconnect().await?;
+    Ok(())
+}
+
+/// Whether the underlying BLE link is still up. Used to tell an idle/asleep but
+/// still-connected tracker (hold the link and wait — reconnect churn is what
+/// wedges this device) from a genuine disconnection (reconnect).
+pub async fn is_connected(tracker: &Tracker) -> bool {
+    tracker.peripheral.is_connected().await.unwrap_or(false)
 }
 
 /// Return the first peripheral matching `opts`, if currently known to the adapter.

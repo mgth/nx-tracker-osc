@@ -50,8 +50,11 @@ async fn monitor_loop(
     analyzer: &mut Analyzer,
     csv: &mut Option<BufWriter<File>>,
 ) -> Result<()> {
+    // Reuse one adapter (one D-Bus session) across every reconnect: a fresh
+    // Manager per attempt leaks a socket each time until the process EMFILEs.
+    let adapter = ble::first_adapter().await?;
     loop {
-        match ble::connect(opts).await {
+        match ble::connect_waiting_on(&adapter, opts).await {
             Ok(tracker) => {
                 info!(
                     name = ?tracker.name,

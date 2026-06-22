@@ -135,7 +135,14 @@ Extras:
   zeroes at launch.
 - `--smoothing <0..1>`: exponential quaternion smoothing (0 = instant).
 - `--max-hz <n>`: cap the OSC send rate (default 60).
-- Auto-reconnects when the tracker sleeps/wakes.
+- **Sleep-aware reconnect**: the tracker auto-sleeps when idle. `run` detects
+  the no-data state (no `a015` within a few seconds) and tells you to *"move it
+  or short-press its button to wake it"*. When the link merely goes silent but
+  stays connected, `run` **holds the connection** and waits — moving the tracker
+  or a short button press resumes the stream on the same link (reconnecting
+  instead would only churn the BLE link, which is what wedges this device). It
+  reconnects only if the link actually drops, and keeps retrying if the tracker
+  is out of range — no need to restart `nxosc`.
 
 ### Device exploration (`gatt` / `probe`)
 

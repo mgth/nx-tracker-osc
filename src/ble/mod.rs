@@ -8,5 +8,8 @@ pub mod uuids;
 mod device;
 mod stream;
 
-pub use device::{connect, scan, ConnectOptions, ScannedDevice};
+pub use device::{
+    connect_waiting_on, disconnect, first_adapter, is_connected, scan, ConnectOptions,
+    ScannedDevice,
+};
 pub use stream::{frames, Frame};
